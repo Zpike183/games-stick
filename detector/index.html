@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Detector de cuerpo y manos</title>
+<style>
+:root{--bg:#0d0f12;--card:#171a1f;--ink:#e9ecef;--dim:#8a929c;--acc:#ff2b2b;--hand:#29d3ff;--pose:#ffd23f}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:900px;margin:0 auto;padding:16px}
+h1{font-size:24px;margin:4px 0 12px;display:flex;align-items:center;gap:10px}
+h1 i{width:12px;height:12px;border-radius:50%;background:#444;display:inline-block}
+h1 i.on{background:var(--acc);box-shadow:0 0 12px var(--acc);animation:p 1.2s infinite}
+@keyframes p{50%{opacity:.35}}
+.stage{position:relative;width:100%;aspect-ratio:3/4;background:#000;border-radius:14px;overflow:hidden;border:1px solid #2a2f36}
+.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.stage.mirror video,.stage.mirror canvas{transform:scaleX(-1)}
+.msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--dim)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+button{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid #333a42;background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+button.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+button:focus-visible{outline:2px solid var(--hand);outline-offset:2px}
+label.chk{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 10px;background:var(--card);border-radius:10px;border:1px solid #333a42}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.box{background:var(--card);border-radius:10px;padding:10px 12px;border:1px solid #2a2f36}
+.box b{display:block;font-size:22px}
+.box span{color:var(--dim);font-size:13px}
+@media (prefers-reduced-motion:reduce){h1 i.on{animation:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1><i id="dot"></i>Detector de cuerpo y manos</h1>
+  <div class="stage mirror" id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="msg" id="msg">Tocá <b>&nbsp;Iniciar cámara&nbsp;</b> y aceptá el permiso.</div>
+  </div>
+  <div class="bar">
+    <button class="main" id="start">Iniciar cámara</button>
+    <button id="flip">Cambiar cámara</button>
+    <label class="chk"><input type="checkbox" id="showPose" checked> Cuerpo</label>
+    <label class="chk"><input type="checkbox" id="showHands" checked> Manos</label>
+  </div>
+  <div class="info">
+    <div class="box"><span>Persona</span><b id="iPerson">—</b></div>
+    <div class="box"><span>Manos detectadas</span><b id="iHands">—</b></div>
+    <div class="box"><span>Mano derecha · dedos</span><b id="iRight">—</b></div>
+    <div class="box"><span>Mano izquierda · dedos</span><b id="iLeft">—</b></div>
+    <div class="box"><span>FPS</span><b id="iFps">—</b></div>
+  </div>
+</main>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker, HandLandmarker, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+const $ = id => document.getElementById(id);
+const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
+const draw = new DrawingUtils(ctx);
+let pose, hands, stream, facing = "user", running = false, lastT = -1, frames = 0, fpsT = performance.now();
+
+async function make(Cls, url, opts, delegate) {
+  return Cls.createFromOptions(await vision(), {
+    baseOptions: { modelAssetPath: url, delegate }, runningMode: "VIDEO", ...opts
+  });
+}
+let _v; const vision = () => _v ??= FilesetResolver.forVisionTasks(
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+
+async function loadModels() {
+  if (pose && hands) return;
+  $("msg").textContent = "Cargando modelos de IA…";
+  const P = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  const H = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+  for (const d of ["GPU", "CPU"]) {
+    try {
+      pose = await make(PoseLandmarker, P, { numPoses: 1 }, d);
+      hands = await make(HandLandmarker, H, { numHands: 2 }, d);
+      return;
+    } catch (e) { if (d === "CPU") throw e; }
+  }
+}
+
+async function startCam() {
+  stream?.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  $("stage").style.aspectRatio = `${video.videoWidth}/${video.videoHeight}`;
+  $("stage").classList.toggle("mirror", facing === "user");
+}
+
+// Cuenta dedos levantados comparando distancias a la muñeca
+const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function countFingers(l) {
+  let n = 0;
+  for (const [tip, pip] of [[8, 6], [12, 10], [16, 14], [20, 18]])
+    if (d(l[tip], l[0]) > d(l[pip], l[0])) n++;
+  if (d(l[4], l[17]) > d(l[3], l[17]) * 1.1 && d(l[4], l[5]) > d(l[3], l[5])) n++;
+  return n;
+}
+
+function loop() {
+  if (!running) return;
+  const now = performance.now();
+  if (video.currentTime !== lastT && video.readyState >= 2) {
+    lastT = video.currentTime;
+    const pr = pose.detectForVideo(video, now);
+    const hr = hands.detectForVideo(video, now);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if ($("showPose").checked) for (const lm of pr.landmarks) {
+      draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#ffd23f", lineWidth: 4 });
+      draw.drawLandmarks(lm, { color: "#ff2b2b", radius: 4 });
+    }
+    let right = "—", left = "—";
+    hr.landmarks.forEach((lm, i) => {
+      // MediaPipe asume imagen espejada; la cámara da la imagen real, así que se invierte
+      const isRight = hr.handednesses[i][0].categoryName === "Left";
+      const n = countFingers(lm);
+      if (isRight) right = n; else left = n;
+      if ($("showHands").checked) {
+        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: isRight ? "#29d3ff" : "#7CFF6B", lineWidth: 4 });
+        draw.drawLandmarks(lm, { color: "#fff", fillColor: isRight ? "#29d3ff" : "#7CFF6B", radius: 3 });
+      }
+    });
+    $("iPerson").textContent = pr.landmarks.length ? "Sí" : "No";
+    $("iHands").textContent = hr.landmarks.length;
+    $("iRight").textContent = right;
+    $("iLeft").textContent = left;
+    frames++;
+    if (now - fpsT > 1000) { $("iFps").textContent = frames; frames = 0; fpsT = now; }
+  }
+  requestAnimationFrame(loop);
+}
+
+$("start").addEventListener("click", async () => {
+  try {
+    if (running) {
+      running = false; stream?.getTracks().forEach(t => t.stop());
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      $("dot").classList.remove("on"); $("start").textContent = "Iniciar cámara";
+      $("msg").style.display = ""; $("msg").textContent = "Cámara detenida.";
+      return;
+    }
+    await loadModels();
+    $("msg").textContent = "Abriendo cámara…";
+    await startCam();
+    $("msg").style.display = "none";
+    running = true; $("dot").classList.add("on"); $("start").textContent = "Detener";
+    loop();
+  } catch (e) {
+    $("msg").style.display = "";
+    $("msg").textContent = "No se pudo iniciar: " + (e.message || e) +
+      ". Fijate de abrir la página por https (por ejemplo GitHub Pages) y dar permiso a la cámara.";
+  }
+});
+
+$("flip").addEventListener("click", async () => {
+  facing = facing === "user" ? "environment" : "user";
+  if (running) try { await startCam(); } catch (e) { $("msg").style.display = ""; $("msg").textContent = e.message; }
+});
+</script>
+</body>
+</html>
