@@ -59,7 +59,7 @@ import { FilesetResolver, PoseLandmarker, HandLandmarker, DrawingUtils }
 const $ = id => document.getElementById(id);
 const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
 const draw = new DrawingUtils(ctx);
-let pose, hands, stream, facing = "user", running = false, lastT = -1, frames = 0, fpsT = performance.now();
+let pose, hands, seen = 0, stream, facing = "user", running = false, lastT = -1, frames = 0, fpsT = performance.now();
 
 async function make(Cls, url, opts, delegate) {
   return Cls.createFromOptions(await vision(), {
@@ -72,12 +72,12 @@ let _v; const vision = () => _v ??= FilesetResolver.forVisionTasks(
 async function loadModels() {
   if (pose && hands) return;
   $("msg").textContent = "Cargando modelos de IA…";
-  const P = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  const P = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
   const H = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
   for (const d of ["GPU", "CPU"]) {
     try {
-      pose = await make(PoseLandmarker, P, { numPoses: 1 }, d);
-      hands = await make(HandLandmarker, H, { numHands: 2 }, d);
+      pose = await make(PoseLandmarker, P, { numPoses: 1, minPoseDetectionConfidence: 0.7, minPosePresenceConfidence: 0.7, minTrackingConfidence: 0.7 }, d);
+      hands = await make(HandLandmarker, H, { numHands: 2, minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6 }, d);
       return;
     } catch (e) { if (d === "CPU") throw e; }
   }
@@ -114,7 +114,16 @@ function loop() {
     const hr = hands.detectForVideo(video, now);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if ($("showPose").checked) for (const lm of pr.landmarks) {
+    // Filtro anti-fantasmas: hombros y caderas tienen que verse claros y la persona sostenerse varios cuadros
+    const real = pr.landmarks.filter(lm => {
+      const v = [11, 12, 23, 24].map(i => lm[i].visibility ?? 0);
+      const head = [0, 2, 5].some(i => (lm[i].visibility ?? 0) > 0.6);
+      const torso = Math.abs(lm[11].x - lm[12].x) > 0.04;
+      return Math.min(...v) > 0.6 && (head || v.every(x => x > 0.8)) && torso;
+    });
+    seen = real.length ? Math.min(seen + 1, 10) : Math.max(seen - 2, 0);
+    const people = seen >= 5 ? real : [];
+    if ($("showPose").checked) for (const lm of people) {
       draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#ffd23f", lineWidth: 4 });
       draw.drawLandmarks(lm, { color: "#ff2b2b", radius: 4 });
     }
@@ -129,7 +138,7 @@ function loop() {
         draw.drawLandmarks(lm, { color: "#fff", fillColor: isRight ? "#29d3ff" : "#7CFF6B", radius: 3 });
       }
     });
-    $("iPerson").textContent = pr.landmarks.length ? "Sí" : "No";
+    $("iPerson").textContent = people.length ? "Sí" : "No";
     $("iHands").textContent = hr.landmarks.length;
     $("iRight").textContent = right;
     $("iLeft").textContent = left;
