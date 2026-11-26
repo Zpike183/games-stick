@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Detector de cuerpo y manos</title>
+<title>Detector y arpa de aire</title>
 <style>
 :root{--bg:#0d0f12;--card:#171a1f;--ink:#e9ecef;--dim:#8a929c;--acc:#ff2b2b;--hand:#29d3ff;--pose:#ffd23f}
 *{box-sizing:border-box;min-width:0}
@@ -18,20 +18,22 @@ h1 i.on{background:var(--acc);box-shadow:0 0 12px var(--acc);animation:p 1.2s in
 .stage.mirror video,.stage.mirror canvas{transform:scaleX(-1)}
 .msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--dim)}
 .bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
-button{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid #333a42;background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+button,select{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid #333a42;background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
 button.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
-button:focus-visible{outline:2px solid var(--hand);outline-offset:2px}
+button:focus-visible,select:focus-visible{outline:2px solid var(--hand);outline-offset:2px}
 label.chk{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 10px;background:var(--card);border-radius:10px;border:1px solid #333a42}
 .info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
 .box{background:var(--card);border-radius:10px;padding:10px 12px;border:1px solid #2a2f36}
 .box b{display:block;font-size:22px}
 .box span{color:var(--dim);font-size:13px}
+.help{color:var(--dim);font-size:14px;margin:10px 0 0}
+.help b{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){h1 i.on{animation:none}}
 </style>
 </head>
 <body>
 <main>
-  <h1><i id="dot"></i>Detector de cuerpo y manos</h1>
+  <h1><i id="dot"></i>Detector y arpa de aire</h1>
   <div class="stage mirror" id="stage">
     <video id="video" playsinline muted></video>
     <canvas id="canvas"></canvas>
@@ -40,16 +42,28 @@ label.chk{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 10px
   <div class="bar">
     <button class="main" id="start">Iniciar cámara</button>
     <button id="flip">Cambiar cámara</button>
-    <label class="chk"><input type="checkbox" id="showPose" checked> Cuerpo</label>
+    <label class="chk"><input type="checkbox" id="showPose"> Cuerpo</label>
     <label class="chk"><input type="checkbox" id="showHands" checked> Manos</label>
   </div>
+  <div class="bar">
+    <label class="chk"><input type="checkbox" id="harp" checked> Arpa</label>
+    <select id="scale" aria-label="Escala">
+      <option value="penta">Pentatónica</option>
+      <option value="mayor">Do mayor</option>
+      <option value="menor">La menor</option>
+    </select>
+    <button id="undo">Deshacer cuerda</button>
+    <button id="clear">Borrar todas</button>
+  </div>
   <div class="info">
+    <div class="box"><span>Cuerdas</span><b id="iStrings">0</b></div>
+    <div class="box"><span>Última nota</span><b id="iNote">—</b></div>
     <div class="box"><span>Persona</span><b id="iPerson">—</b></div>
-    <div class="box"><span>Manos detectadas</span><b id="iHands">—</b></div>
-    <div class="box"><span>Mano derecha · dedos</span><b id="iRight">—</b></div>
-    <div class="box"><span>Mano izquierda · dedos</span><b id="iLeft">—</b></div>
+    <div class="box"><span>Manos</span><b id="iHands">—</b></div>
+    <div class="box"><span>Dedos der. / izq.</span><b id="iFingers">—</b></div>
     <div class="box"><span>FPS</span><b id="iFps">—</b></div>
   </div>
+  <p class="help"><b>Crear cuerda:</b> juntá pulgar e índice (pinza), estirá y soltá: la cuerda queda fija en el aire. Más larga = nota más grave.<br><b>Tocar:</b> con la mano abierta, pasá la punta del índice a través de la cuerda.</p>
 </main>
 
 <script type="module">
@@ -61,14 +75,14 @@ const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
 const draw = new DrawingUtils(ctx);
 let pose, hands, seen = 0, stream, facing = "user", running = false, lastT = -1, frames = 0, fpsT = performance.now();
 
+/* ---------- Modelos ---------- */
+let _v; const vision = () => _v ??= FilesetResolver.forVisionTasks(
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
 async function make(Cls, url, opts, delegate) {
   return Cls.createFromOptions(await vision(), {
     baseOptions: { modelAssetPath: url, delegate }, runningMode: "VIDEO", ...opts
   });
 }
-let _v; const vision = () => _v ??= FilesetResolver.forVisionTasks(
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-
 async function loadModels() {
   if (pose && hands) return;
   $("msg").textContent = "Cargando modelos de IA…";
@@ -82,7 +96,6 @@ async function loadModels() {
     } catch (e) { if (d === "CPU") throw e; }
   }
 }
-
 async function startCam() {
   stream?.getTracks().forEach(t => t.stop());
   stream = await navigator.mediaDevices.getUserMedia({
@@ -95,16 +108,136 @@ async function startCam() {
   $("stage").classList.toggle("mirror", facing === "user");
 }
 
-// Cuenta dedos levantados comparando distancias a la muñeca
-const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+/* ---------- Audio: cuerda pulsada (Karplus-Strong) ---------- */
+let ac, out; const bufCache = new Map();
+function initAudio() {
+  if (ac) return ac.resume();
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  const comp = ac.createDynamicsCompressor();
+  out = ac.createGain(); out.gain.value = 0.8;
+  out.connect(comp).connect(ac.destination);
+}
+function stringBuffer(freq) {
+  if (bufCache.has(freq)) return bufCache.get(freq);
+  const sr = ac.sampleRate, len = Math.floor(sr * 2.5), b = ac.createBuffer(1, len, sr), x = b.getChannelData(0);
+  const N = Math.max(2, Math.round(sr / freq));
+  for (let i = 0; i < N; i++) x[i] = (Math.random() * 2 - 1) * 0.5;
+  for (let i = N; i < len; i++) x[i] = 0.997 * 0.5 * (x[i - N] + x[i - N + 1]);
+  bufCache.set(freq, b); return b;
+}
+function pluck(freq) {
+  if (!ac) return;
+  const s = ac.createBufferSource(); s.buffer = stringBuffer(freq);
+  s.connect(out); s.start();
+}
+
+/* ---------- Escalas y notas ---------- */
+const NAMES = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"];
+const SCALES = { penta: [0, 2, 4, 7, 9], mayor: [0, 2, 4, 5, 7, 9, 11], menor: [9, 11, 0, 2, 4, 5, 7] };
+function scaleNotes() {
+  const st = SCALES[$("scale").value], list = [];
+  for (let m = 48; m <= 84; m++) if (st.includes(m % 12)) list.push(m); // Do3 a Do6
+  return list;
+}
+function noteForLength(L) {
+  const notes = scaleNotes();
+  const diag = Math.hypot(canvas.width, canvas.height);
+  const t = Math.min(1, Math.max(0, (L / diag - 0.08) / 0.75));
+  const m = notes[Math.round((1 - t) * (notes.length - 1))]; // larga = grave
+  return { midi: m, freq: 440 * 2 ** ((m - 69) / 12), name: NAMES[m % 12] + (Math.floor(m / 12) - 1) };
+}
+
+/* ---------- Cuerdas ---------- */
+let strings = [];           // {a,b,midi,freq,name,hit,last}
+const handState = {};       // por mano: {pinch, start, prevTip}
+const P = (l, i) => ({ x: l[i].x * canvas.width, y: l[i].y * canvas.height });
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+function crosses(p, q, a, b) {
+  const d1 = cross(a, b, p), d2 = cross(a, b, q), d3 = cross(p, q, a), d4 = cross(p, q, b);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+function updateCount() { $("iStrings").textContent = strings.length; }
+function retune() { for (const s of strings) Object.assign(s, noteForLength(dist(s.a, s.b))); }
+
+function harpStep(hr, now) {
+  const active = new Set();
+  hr.landmarks.forEach((lm, i) => {
+    const key = hr.handednesses[i][0].categoryName;
+    active.add(key);
+    const st = handState[key] ??= { pinch: false, start: null, prevTip: null };
+    const thumb = P(lm, 4), index = P(lm, 8), size = dist(P(lm, 0), P(lm, 9));
+    const pd = dist(thumb, index);
+    const mid = { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 };
+
+    if (!st.pinch && pd < size * 0.28) { st.pinch = true; st.start = mid; }
+    else if (st.pinch && pd > size * 0.45) {
+      st.pinch = false;
+      const L = dist(st.start, st.end || mid);
+      if (L > Math.hypot(canvas.width, canvas.height) * 0.06) {
+        const s = { a: st.start, b: st.end || mid, hit: -1e9, ...noteForLength(L) };
+        strings.push(s); updateCount(); pluck(s.freq); s.hit = now; $("iNote").textContent = s.name;
+      }
+      st.start = st.end = null;
+    }
+    if (st.pinch) {
+      st.end = mid;
+      const n = noteForLength(dist(st.start, mid));
+      ctx.setLineDash([10, 8]); ctx.strokeStyle = "#ffffffcc"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(st.start.x, st.start.y); ctx.lineTo(mid.x, mid.y); ctx.stroke(); ctx.setLineDash([]);
+      label(n.name, mid.x, mid.y - 18, "#fff");
+      st.prevTip = null;
+    } else {
+      // Tocar: la punta del índice cruza una cuerda
+      if (st.prevTip && dist(st.prevTip, index) < canvas.width * 0.4) {
+        for (const s of strings) {
+          if (now - s.hit > 150 && crosses(st.prevTip, index, s.a, s.b)) {
+            s.hit = now; pluck(s.freq); $("iNote").textContent = s.name;
+          }
+        }
+      }
+      st.prevTip = index;
+      ctx.fillStyle = "#ff2b2b"; ctx.beginPath(); ctx.arc(index.x, index.y, 9, 0, 7); ctx.fill();
+    }
+  });
+  for (const k in handState) if (!active.has(k)) { handState[k].prevTip = null; if (handState[k].pinch) { handState[k].pinch = false; handState[k].start = handState[k].end = null; } }
+}
+
+function label(text, x, y, color) {
+  ctx.save(); ctx.translate(x, y);
+  if (facing === "user") ctx.scale(-1, 1);
+  ctx.font = "bold 22px system-ui,sans-serif"; ctx.textAlign = "center";
+  ctx.lineWidth = 4; ctx.strokeStyle = "#000a"; ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = color; ctx.fillText(text, 0, 0); ctx.restore();
+}
+
+function drawStrings(now) {
+  for (const s of strings) {
+    const t = now - s.hit, amp = t < 1500 ? 14 * Math.exp(-t / 350) * Math.sin(t * 0.09) : 0;
+    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, L = Math.hypot(dx, dy) || 1;
+    const mx = (s.a.x + s.b.x) / 2 - dy / L * amp, my = (s.a.y + s.b.y) / 2 + dx / L * amp;
+    const glow = t < 400;
+    const hue = 40 + (s.midi - 48) * 6;
+    ctx.strokeStyle = `hsl(${hue} 95% ${glow ? 75 : 60}%)`;
+    ctx.lineWidth = glow ? 6 : 4; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = glow ? 20 : 6;
+    ctx.beginPath(); ctx.moveTo(s.a.x, s.a.y); ctx.quadraticCurveTo(mx, my, s.b.x, s.b.y); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.fillStyle = "#fff";
+    for (const p of [s.a, s.b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 7); ctx.fill(); }
+    label(s.name, (s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2 - 16, ctx.strokeStyle);
+  }
+}
+
+/* ---------- Dedos ---------- */
+const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function countFingers(l) {
   let n = 0;
   for (const [tip, pip] of [[8, 6], [12, 10], [16, 14], [20, 18]])
-    if (d(l[tip], l[0]) > d(l[pip], l[0])) n++;
-  if (d(l[4], l[17]) > d(l[3], l[17]) * 1.1 && d(l[4], l[5]) > d(l[3], l[5])) n++;
+    if (d2(l[tip], l[0]) > d2(l[pip], l[0])) n++;
+  if (d2(l[4], l[17]) > d2(l[3], l[17]) * 1.1 && d2(l[4], l[5]) > d2(l[3], l[5])) n++;
   return n;
 }
 
+/* ---------- Bucle ---------- */
 function loop() {
   if (!running) return;
   const now = performance.now();
@@ -114,12 +247,11 @@ function loop() {
     const hr = hands.detectForVideo(video, now);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Filtro anti-fantasmas: hombros y caderas tienen que verse claros y la persona sostenerse varios cuadros
+    // Filtro anti-fantasmas
     const real = pr.landmarks.filter(lm => {
       const v = [11, 12, 23, 24].map(i => lm[i].visibility ?? 0);
       const head = [0, 2, 5].some(i => (lm[i].visibility ?? 0) > 0.6);
-      const torso = Math.abs(lm[11].x - lm[12].x) > 0.04;
-      return Math.min(...v) > 0.6 && (head || v.every(x => x > 0.8)) && torso;
+      return Math.min(...v) > 0.6 && (head || v.every(x => x > 0.8)) && Math.abs(lm[11].x - lm[12].x) > 0.04;
     });
     seen = real.length ? Math.min(seen + 1, 10) : Math.max(seen - 2, 0);
     const people = seen >= 5 ? real : [];
@@ -127,29 +259,33 @@ function loop() {
       draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#ffd23f", lineWidth: 4 });
       draw.drawLandmarks(lm, { color: "#ff2b2b", radius: 4 });
     }
-    let right = "—", left = "—";
+
+    let right = "–", left = "–";
     hr.landmarks.forEach((lm, i) => {
-      // MediaPipe asume imagen espejada; la cámara da la imagen real, así que se invierte
       const isRight = hr.handednesses[i][0].categoryName === "Left";
       const n = countFingers(lm);
       if (isRight) right = n; else left = n;
       if ($("showHands").checked) {
-        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: isRight ? "#29d3ff" : "#7CFF6B", lineWidth: 4 });
-        draw.drawLandmarks(lm, { color: "#fff", fillColor: isRight ? "#29d3ff" : "#7CFF6B", radius: 3 });
+        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: isRight ? "#29d3ff" : "#7CFF6B", lineWidth: 3 });
+        draw.drawLandmarks(lm, { color: "#fff", fillColor: isRight ? "#29d3ff" : "#7CFF6B", radius: 2 });
       }
     });
+
+    if ($("harp").checked) { drawStrings(now); harpStep(hr, now); }
+
     $("iPerson").textContent = people.length ? "Sí" : "No";
     $("iHands").textContent = hr.landmarks.length;
-    $("iRight").textContent = right;
-    $("iLeft").textContent = left;
+    $("iFingers").textContent = `${right} / ${left}`;
     frames++;
     if (now - fpsT > 1000) { $("iFps").textContent = frames; frames = 0; fpsT = now; }
   }
   requestAnimationFrame(loop);
 }
 
+/* ---------- Controles ---------- */
 $("start").addEventListener("click", async () => {
   try {
+    initAudio();
     if (running) {
       running = false; stream?.getTracks().forEach(t => t.stop());
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -166,14 +302,17 @@ $("start").addEventListener("click", async () => {
   } catch (e) {
     $("msg").style.display = "";
     $("msg").textContent = "No se pudo iniciar: " + (e.message || e) +
-      ". Fijate de abrir la página por https (por ejemplo GitHub Pages) y dar permiso a la cámara.";
+      ". Fijate de abrir la página por https y dar permiso a la cámara.";
   }
 });
-
 $("flip").addEventListener("click", async () => {
   facing = facing === "user" ? "environment" : "user";
+  strings = []; updateCount();
   if (running) try { await startCam(); } catch (e) { $("msg").style.display = ""; $("msg").textContent = e.message; }
 });
+$("undo").addEventListener("click", () => { strings.pop(); updateCount(); });
+$("clear").addEventListener("click", () => { strings = []; updateCount(); });
+$("scale").addEventListener("change", retune);
 </script>
 </body>
 </html>
