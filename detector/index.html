@@ -28,10 +28,11 @@ label.chk{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 10px
 .box span{color:var(--dim);font-size:13px}
 .help{color:var(--dim);font-size:14px;margin:10px 0 0}
 .help b{color:var(--ink)}
+body.m-arpa .g,body.m-guitarra .h,body.m-off .g,body.m-off .h{display:none}
 @media (prefers-reduced-motion:reduce){h1 i.on{animation:none}}
 </style>
 </head>
-<body>
+<body class="m-arpa">
 <main>
   <h1><i id="dot"></i>Detector y arpa de aire</h1>
   <div class="stage mirror" id="stage">
@@ -46,24 +47,35 @@ label.chk{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 10px
     <label class="chk"><input type="checkbox" id="showHands" checked> Manos</label>
   </div>
   <div class="bar">
-    <label class="chk"><input type="checkbox" id="harp" checked> Arpa</label>
-    <select id="scale" aria-label="Escala">
+    <select id="mode" aria-label="Modo">
+      <option value="arpa">Modo arpa</option>
+      <option value="guitarra">Modo guitarra</option>
+      <option value="off">Sin instrumento</option>
+    </select>
+    <select id="timbre" aria-label="Sonido" class="g">
+      <option value="nylon">Criolla (nylon)</option>
+      <option value="acero">Acústica (metal)</option>
+    </select>
+    <label class="chk g"><input type="checkbox" id="lefty"> Zurdo</label>
+    <select id="scale" aria-label="Escala" class="h">
       <option value="penta">Pentatónica</option>
       <option value="mayor">Do mayor</option>
       <option value="menor">La menor</option>
     </select>
-    <button id="undo">Deshacer cuerda</button>
-    <button id="clear">Borrar todas</button>
+    <button id="undo" class="h">Deshacer cuerda</button>
+    <button id="clear" class="h">Borrar todas</button>
   </div>
   <div class="info">
-    <div class="box"><span>Cuerdas</span><b id="iStrings">0</b></div>
+    <div class="box h"><span>Cuerdas</span><b id="iStrings">0</b></div>
+    <div class="box g"><span>Acorde</span><b id="iChord">Al aire</b></div>
     <div class="box"><span>Última nota</span><b id="iNote">—</b></div>
     <div class="box"><span>Persona</span><b id="iPerson">—</b></div>
     <div class="box"><span>Manos</span><b id="iHands">—</b></div>
     <div class="box"><span>Dedos der. / izq.</span><b id="iFingers">—</b></div>
     <div class="box"><span>FPS</span><b id="iFps">—</b></div>
   </div>
-  <p class="help"><b>Crear cuerda:</b> juntá pulgar e índice (pinza), estirá y soltá: la cuerda queda fija en el aire. Más larga = nota más grave.<br><b>Tocar:</b> con la mano abierta, pasá la punta del índice a través de la cuerda.</p>
+  <p class="help h"><b>Crear cuerda:</b> juntá pulgar e índice (pinza), estirá y soltá: la cuerda queda fija en el aire. Más larga = nota más grave.<br><b>Tocar:</b> con la mano abierta, pasá la punta del índice a través de la cuerda.</p>
+  <p class="help g"><b>Rasguear:</b> con la mano derecha, pasá la punta del índice de lado a lado por las 6 cuerdas verticales (más rápido = más fuerte).<br><b>Acordes con la mano izquierda:</b> puño = al aire · 1 dedo = Do · 2 = Sol · 3 = La m · 4 = Fa · 5 = Mi m. Las cuerdas apagadas del acorde se ven grises.</p>
 </main>
 
 <script type="module">
@@ -115,20 +127,96 @@ function initAudio() {
   ac = new (window.AudioContext || window.webkitAudioContext)();
   const comp = ac.createDynamicsCompressor();
   out = ac.createGain(); out.gain.value = 0.8;
-  out.connect(comp).connect(ac.destination);
+  // "Caja" de guitarra: realza graves y medios como la madera
+  const b1 = ac.createBiquadFilter(); b1.type = "peaking"; b1.frequency.value = 110; b1.Q.value = 1.2; b1.gain.value = 5;
+  const b2 = ac.createBiquadFilter(); b2.type = "peaking"; b2.frequency.value = 230; b2.Q.value = 1.5; b2.gain.value = 3;
+  const b3 = ac.createBiquadFilter(); b3.type = "lowpass"; b3.frequency.value = 6000;
+  out.connect(b1).connect(b2).connect(b3).connect(comp).connect(ac.destination);
 }
-function stringBuffer(freq) {
-  if (bufCache.has(freq)) return bufCache.get(freq);
-  const sr = ac.sampleRate, len = Math.floor(sr * 2.5), b = ac.createBuffer(1, len, sr), x = b.getChannelData(0);
+// timbre: "arpa" | "nylon" | "acero"
+function stringBuffer(freq, timbre = "arpa") {
+  const k = freq + timbre;
+  if (bufCache.has(k)) return bufCache.get(k);
+  const sr = ac.sampleRate, len = Math.floor(sr * 3), b = ac.createBuffer(1, len, sr), x = b.getChannelData(0);
   const N = Math.max(2, Math.round(sr / freq));
   for (let i = 0; i < N; i++) x[i] = (Math.random() * 2 - 1) * 0.5;
-  for (let i = N; i < len; i++) x[i] = 0.997 * 0.5 * (x[i - N] + x[i - N + 1]);
-  bufCache.set(freq, b); return b;
+  if (timbre === "nylon") for (let p = 0; p < 2; p++) for (let i = 1; i < N; i++) x[i] = (x[i] + x[i - 1]) / 2 * 1.6; // ataque más suave
+  const loss = timbre === "acero" ? 0.9985 : timbre === "nylon" ? 0.996 : 0.997;
+  for (let i = N; i < len; i++) x[i] = loss * 0.5 * (x[i - N] + x[i - N + 1]);
+  bufCache.set(k, b); return b;
 }
-function pluck(freq) {
+function pluck(freq, timbre, vol = 1) {
   if (!ac) return;
-  const s = ac.createBufferSource(); s.buffer = stringBuffer(freq);
-  s.connect(out); s.start();
+  const s = ac.createBufferSource(); s.buffer = stringBuffer(freq, timbre);
+  const g = ac.createGain(); g.gain.value = vol;
+  s.connect(g).connect(out); s.start();
+}
+
+/* ---------- Guitarra ---------- */
+const OPEN = [40, 45, 50, 55, 59, 64]; // Mi La Re Sol Si Mi
+const CHORDS = {           // de 6ª (grave) a 1ª; null = cuerda apagada
+  0: { name: "Al aire", n: OPEN },
+  1: { name: "Do", n: [null, 48, 52, 55, 60, 64] },
+  2: { name: "Sol", n: [43, 47, 50, 55, 59, 67] },
+  3: { name: "La m", n: [null, 45, 52, 57, 60, 64] },
+  4: { name: "Fa", n: [41, 48, 53, 57, 60, 65] },
+  5: { name: "Mi m", n: [40, 47, 52, 55, 59, 64] },
+};
+const midiInfo = m => ({ midi: m, freq: 440 * 2 ** ((m - 69) / 12), name: NAMES[m % 12] + (Math.floor(m / 12) - 1) });
+let gStrings = null; // se crea al primer uso (NAMES se define más abajo)
+let chord = 0, chordCand = 0, chordN = 0;
+function layoutGuitar() {
+  const W = canvas.width, H = canvas.height;
+  // Verticales, del lado de la mano que rasguea (en la imagen real de la cámara,
+  // la mano derecha de la persona queda a la izquierda). Mi grave más cerca del centro.
+  const lefty = $("lefty").checked, gap = W * 0.045;
+  gStrings.forEach((s, i) => {
+    const x = lefty ? W * 0.64 + i * gap : W * 0.36 - i * gap;
+    s.a = { x, y: H * 0.14 }; s.b = { x, y: H * 0.86 };
+  });
+}
+function setChord(c) {
+  chord = c;
+  CHORDS[c].n.forEach((m, i) => {
+    const s = gStrings[i];
+    s.muted = m === null;
+    if (m !== null) Object.assign(s, midiInfo(m));
+  });
+  $("iChord").textContent = CHORDS[c].name;
+}
+function guitarStep(hr, now) {
+  if (!gStrings) { gStrings = OPEN.map(m => ({ hit: -1e9, ...midiInfo(m) })); setChord(chord); }
+  layoutGuitar();
+  const lefty = $("lefty").checked, active = new Set();
+  let chordFingers = null;
+  hr.landmarks.forEach((lm, i) => {
+    const key = hr.handednesses[i][0].categoryName;
+    const userRight = key === "Left";
+    if (userRight !== lefty) {          // mano que rasguea
+      active.add(key);
+      const st = handState[key] ??= { prevTip: null };
+      const tip = P(lm, 8);
+      if (st.prevTip && dist(st.prevTip, tip) < canvas.width * 0.4) {
+        const speed = dist(st.prevTip, tip) / canvas.height;
+        const vol = Math.min(1, 0.35 + speed * 6);
+        for (const s of gStrings) {
+          if (!s.muted && now - s.hit > 120 && crosses(st.prevTip, tip, s.a, s.b)) {
+            s.hit = now; pluck(s.freq, $("timbre").value, vol);
+          }
+        }
+      }
+      st.prevTip = tip;
+      ctx.fillStyle = "#ff2b2b"; ctx.beginPath(); ctx.arc(tip.x, tip.y, 10, 0, 7); ctx.fill();
+    } else chordFingers = countFingers(lm);
+  });
+  for (const k in handState) if (!active.has(k)) handState[k].prevTip = null;
+  // El acorde cambia solo si la cuenta de dedos se mantiene unos cuadros (evita saltos)
+  if (chordFingers !== null) {
+    if (chordFingers === chordCand) chordN++; else { chordCand = chordFingers; chordN = 0; }
+    if (chordN >= 4 && chordCand !== chord) setChord(chordCand);
+  }
+  drawStrings(now, gStrings);
+  label(CHORDS[chord].name, canvas.width / 2, canvas.height * 0.1, "#fff");
 }
 
 /* ---------- Escalas y notas ---------- */
@@ -211,19 +299,20 @@ function label(text, x, y, color) {
   ctx.fillStyle = color; ctx.fillText(text, 0, 0); ctx.restore();
 }
 
-function drawStrings(now) {
-  for (const s of strings) {
+function drawStrings(now, list = strings) {
+  for (const s of list) {
     const t = now - s.hit, amp = t < 1500 ? 14 * Math.exp(-t / 350) * Math.sin(t * 0.09) : 0;
     const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, L = Math.hypot(dx, dy) || 1;
     const mx = (s.a.x + s.b.x) / 2 - dy / L * amp, my = (s.a.y + s.b.y) / 2 + dx / L * amp;
     const glow = t < 400;
     const hue = 40 + (s.midi - 48) * 6;
-    ctx.strokeStyle = `hsl(${hue} 95% ${glow ? 75 : 60}%)`;
+    ctx.strokeStyle = s.muted ? "#666" : `hsl(${hue} 95% ${glow ? 75 : 60}%)`;
     ctx.lineWidth = glow ? 6 : 4; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = glow ? 20 : 6;
     ctx.beginPath(); ctx.moveTo(s.a.x, s.a.y); ctx.quadraticCurveTo(mx, my, s.b.x, s.b.y); ctx.stroke();
     ctx.shadowBlur = 0; ctx.fillStyle = "#fff";
     for (const p of [s.a, s.b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 7); ctx.fill(); }
-    label(s.name, (s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2 - 16, ctx.strokeStyle);
+    if (list === strings) label(s.name, (s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2 - 16, ctx.strokeStyle);
+    else label(s.muted ? "x" : s.name.replace(/\d/, ""), s.a.x, s.a.y - 14, ctx.strokeStyle);
   }
 }
 
@@ -271,7 +360,9 @@ function loop() {
       }
     });
 
-    if ($("harp").checked) { drawStrings(now); harpStep(hr, now); }
+    const mode = $("mode").value;
+    if (mode === "arpa") { drawStrings(now); harpStep(hr, now); }
+    else if (mode === "guitarra") guitarStep(hr, now);
 
     $("iPerson").textContent = people.length ? "Sí" : "No";
     $("iHands").textContent = hr.landmarks.length;
@@ -313,6 +404,10 @@ $("flip").addEventListener("click", async () => {
 $("undo").addEventListener("click", () => { strings.pop(); updateCount(); });
 $("clear").addEventListener("click", () => { strings = []; updateCount(); });
 $("scale").addEventListener("change", retune);
+$("mode").addEventListener("change", () => {
+  document.body.className = "m-" + $("mode").value;
+  for (const k in handState) delete handState[k];
+});
 </script>
 </body>
 </html>
