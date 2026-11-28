@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dojo de arquería VR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: sereno y concentrado, como un dojo de kyudo antes del tiro
+   IDEA: la galería de tiro japonesa: madera, arena, torii al fondo
+   PICTURE: la vista previa 3D del campo de tiro ocupa la parte de arriba
+   COLOUR and TYPE: papel blanco, tinta, bermellón del torii; Zen Kaku Gothic New
+   LAYOUT: vista previa, título, botón de entrar en VR, opciones y ayuda en una columna */
+:root{color-scheme:light dark;--bg:light-dark(#faf8f4,#121212);--ink:light-dark(#1a1a1a,#f1eee8);--mute:light-dark(#5c5a55,#a9a59d);--line:light-dark(#e2ddd3,#2d2b28);--acc:#d2452c;--panel:light-dark(#f1ede5,#1c1b19)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Zen Kaku Gothic New",system-ui,sans-serif;overflow-x:clip}
+.view{position:relative;width:100%;aspect-ratio:16/9;max-height:56svh;background:#bfd9ef}
+.view canvas{position:absolute;inset:0;width:100%!important;height:100%!important;display:block}
+main{max-width:720px;margin:0 auto;padding:24px max(5vw,16px) 40px;display:flex;flex-direction:column;gap:18px}
+h1{font-size:clamp(30px,6vw,46px);line-height:1.05;margin:0;text-wrap:balance}
+h1 span{color:var(--acc)}
+p{margin:0}
+.go{min-height:56px;border:0;border-radius:28px;background:var(--acc);color:#fff;font:700 18px "Zen Kaku Gothic New",sans-serif;cursor:pointer;padding:0 28px;align-self:flex-start}
+.go:disabled{background:#9a958c;cursor:default}
+button:focus-visible,input:focus-visible+span{outline:3px solid var(--acc);outline-offset:2px}
+.msg{font-weight:700;color:var(--acc)}
+.opt{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.opt label{position:relative;display:inline-flex}
+.opt input{position:absolute;opacity:0}
+.opt span{display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:22px;background:var(--panel);cursor:pointer}
+.opt input:checked+span{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.how{display:grid;gap:10px;padding:0;margin:0;list-style:none}
+.how li{display:grid;grid-template-columns:2.2em minmax(0,1fr);gap:6px;align-items:start}
+.how b{display:inline-grid;place-items:center;width:1.8em;height:1.8em;border-radius:50%;background:var(--panel);border:1px solid var(--line);font-size:14px}
+.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.modes div{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--panel)}
+.modes strong{display:block}
+.small{font-size:14px;color:var(--mute)}
+</style></head><body>
+<div class="view" id="view"></div>
+<main>
+  <h1>Dojo de arquería <span>VR</span></h1>
+  <p>Para el Meta Quest 3, con los dos controles. Abrí esta página en el navegador del visor y tocá el botón.</p>
+  <button class="go" id="enter" disabled>Buscando visor…</button>
+  <p class="msg" id="msg" hidden></p>
+  <div class="opt" role="radiogroup" aria-label="Mano del arco">
+    <strong style="margin-right:4px">Arco en la mano</strong>
+    <label><input type="radio" name="hand" value="left" checked><span>Izquierda</span></label>
+    <label><input type="radio" name="hand" value="right"><span>Derecha</span></label>
+  </div>
+  <ol class="how">
+    <li><b>1</b><span>El arco aparece en una mano. Acercá la otra mano a la cuerda y apretá el botón del costado (o el gatillo).</span></li>
+    <li><b>2</b><span>Tirá hacia atrás para tensar: cuanto más tirás, más fuerte sale. El control vibra a medida que tensás.</span></li>
+    <li><b>3</b><span>Apuntá y soltá el botón. Las flechas caen un poco con la distancia: en los blancos lejanos apuntá más arriba.</span></li>
+    <li><b>4</b><span>Para elegir el modo, tirale una flecha al cartel que quieras. Para volver, tirale al cartel MENÚ.</span></li>
+  </ol>
+  <div class="modes">
+    <div><strong>Fácil</strong><span class="small">Cinco blancos fijos de 10 a 40 metros.</span></div>
+    <div><strong>Medio</strong><span class="small">Rondas con blancos que aparecen a distintas distancias y desaparecen en pocos segundos.</span></div>
+    <div><strong>Difícil</strong><span class="small">Blancos fijos lejanos y otros que cruzan moviéndose. Los móviles valen doble.</span></div>
+    <p class="small" style="grid-column:1/-1;margin:0">En los tres modos, las flechas son ilimitadas y la partida dura 60 segundos.</p>
+  </div>
+  <p class="small">Si al tocar el botón no entra en VR, descargá esta página o publicala en tu GitHub y abrila desde ahí.</p>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+{
+const $=id=>document.getElementById(id);
+const msg=t=>{$('msg').textContent=t;$('msg').hidden=!t};
+if(!window.THREE){msg('No se pudo cargar el motor 3D. Revisá la conexión y recargá.');$('enter').textContent='Sin conexión'}
+else{
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+let bowHand=store.get('dojo:hand')||'left';
+document.querySelectorAll('input[name=hand]').forEach(r=>{r.checked=r.value===bowHand;r.addEventListener('change',()=>{bowHand=r.value;store.set('dojo:hand',bowHand);setupHands()})});
+
+/* ---------- escena ---------- */
+const view=$('view');
+const scene=new THREE.Scene();scene.background=new THREE.Color(0xbfd9ef);scene.fog=new THREE.Fog(0xbfd9ef,45,130);
+const camera=new THREE.PerspectiveCamera(70,16/9,0.05,250);camera.position.set(0,1.6,0);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(2,devicePixelRatio||1));
+renderer.outputEncoding=THREE.sRGBEncoding;renderer.xr.enabled=true;view.appendChild(renderer.domElement);
+function fit(){const w=view.clientWidth,h=view.clientHeight;if(!renderer.xr.isPresenting){renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}}
+new ResizeObserver(fit).observe(view);fit();
+scene.add(new THREE.HemisphereLight(0xffffff,0x7a6440,0.95));
+const sun=new THREE.DirectionalLight(0xffffff,0.75);sun.position.set(6,12,4);scene.add(sun);
+const M=c=>new THREE.MeshLambertMaterial({color:c});
+const box=(w,h,d,c,x,y,z)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),M(c));m.position.set(x,y,z);scene.add(m);return m};
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(240,240),M(0xd6bd86));ground.rotation.x=-Math.PI/2;scene.add(ground);
+box(4,0.06,3,0x8b5a2b,0,0.03,0.4);
+for(const x of[-14,14])box(0.3,2.6,62,0xf1ece0,x,1.3,-29);
+for(let z=-2;z>=-60;z-=4)for(const x of[-13.8,13.8])box(0.12,2.6,0.12,0x6b4423,x,1.3,z);
+box(28.6,3.2,0.3,0xf1ece0,0,1.6,-60);
+for(const x of[-3.2,3.2])box(0.45,6,0.45,0xd2452c,x,3,-52);
+box(9,0.45,0.6,0xd2452c,0,6.1,-52);box(8,0.3,0.4,0xd2452c,0,5.2,-52);box(10,0.25,0.8,0x222222,0,6.45,-52);
+
+function label(w,h,draw){const cv=document.createElement('canvas');cv.width=w;cv.height=h;const g=cv.getContext('2d');const tex=new THREE.CanvasTexture(cv);tex.encoding=THREE.sRGBEncoding;
+  const o={tex,set(fn){g.clearRect(0,0,w,h);fn(g,w,h);tex.needsUpdate=true}};o.set(draw);return o}
+const FONT='"Zen Kaku Gothic New", system-ui, sans-serif';
+function textLines(g,w,h,lines,bg){if(bg){g.fillStyle=bg;g.fillRect(0,0,w,h)}g.textAlign='center';g.textBaseline='middle';
+  lines.forEach(([t,size,col,y])=>{g.font=`700 ${size}px ${FONT}`;g.fillStyle=col;g.fillText(t,w/2,y)})}
+for(const d of[10,20,30,40]){box(0.08,1.2,0.08,0x3b2a1a,-6,0.6,-d);
+  const l=label(256,128,(g,w,h)=>textLines(g,w,h,[[d+' m',72,'#1a1a1a',64]],'#f6f1e6'));
+  const p=new THREE.Mesh(new THREE.PlaneGeometry(0.8,0.4),new THREE.MeshBasicMaterial({map:l.tex}));p.position.set(-6,1.35,-d+0.05);scene.add(p)}
+
+const board=label(1024,400,()=>{});
+const boardMesh=new THREE.Mesh(new THREE.PlaneGeometry(4.6,1.8),new THREE.MeshBasicMaterial({map:board.tex}));boardMesh.position.set(0,4,-12);scene.add(boardMesh);
+box(4.8,2,0.1,0x3b2a1a,0,4,-12.08);
+function setBoard(l1,l2,l3){board.set((g,w,h)=>textLines(g,w,h,[[l1,96,'#d2452c',90],[l2,88,'#f6f1e6',210],[l3||'',56,'#cfc8b8',325]],'#1d1a16'))}
+
+/* ---------- carteles que se eligen con flechas ---------- */
+function makePanel(text,w,h,x,y,z,col,action){const g=new THREE.Group();g.position.set(x,y,z);
+  const l=label(512,256,(c,W,H)=>textLines(c,W,H,[[text,96,'#ffffff',128]],col));
+  const face=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:l.tex}));face.position.z=0.051;g.add(face);
+  const back=new THREE.Mesh(new THREE.BoxGeometry(w+0.08,h+0.08,0.1),M(0x2b2118));g.add(back);
+  const post=new THREE.Mesh(new THREE.BoxGeometry(0.08,y,0.08),M(0x3b2a1a));post.position.y=-y/2;g.add(post);
+  scene.add(g);const p={g,w,h,action,l,text,col,flash:0};return p}
+const panels={
+  facil:makePanel('FÁCIL',1.6,0.8,-2.4,1.7,-8,'#2f7d4f',()=>startMode('facil')),
+  medio:makePanel('MEDIO',1.6,0.8,0,1.7,-8,'#c7861d',()=>startMode('medio')),
+  dificil:makePanel('DIFÍCIL',1.6,0.8,2.4,1.7,-8,'#b8321c',()=>startMode('dificil')),
+  mano:makePanel('',1.9,0.55,0,0.75,-6,'#3a3a3a',()=>{bowHand=bowHand==='left'?'right':'left';store.set('dojo:hand',bowHand);document.querySelectorAll('input[name=hand]').forEach(r=>r.checked=r.value===bowHand);setupHands();setHandPanel()}),
+  menu:makePanel('MENÚ',1.1,0.5,4.2,0.75,-6,'#3a3a3a',()=>toMenu())};
+function setHandPanel(){const t=bowHand==='left'?'ARCO: IZQUIERDA':'ARCO: DERECHA';panels.mano.l.set((c,W,H)=>textLines(c,W,H,[[t,64,'#ffffff',128]],'#3a3a3a'))}
+setHandPanel();
+function showPanels(menu){for(const k of['facil','medio','dificil','mano'])panels[k].g.visible=menu;panels.menu.g.visible=!menu}
+
+/* ---------- blancos ---------- */
+const RING=[0xf4f1e8,0x1b1b1b,0x2a6fdb,0xd93a2b,0xf2c230];
+let targets=[];
+function makeTarget(R,x,y,z,opt={}){const g=new THREE.Group();g.position.set(x,y,z);
+  RING.forEach((c,i)=>{const m=new THREE.Mesh(new THREE.CircleGeometry(R*(1-i*.2),40),new THREE.MeshLambertMaterial({color:c}));m.position.z=0.081+i*0.003;g.add(m)});
+  const back=new THREE.Mesh(new THREE.CylinderGeometry(R*1.05,R*1.05,0.16,40),M(0xc9a35a));back.rotation.x=Math.PI/2;g.add(back);
+  if(opt.stand){for(const s of[-1,1]){const leg=new THREE.Mesh(new THREE.BoxGeometry(0.07,y,0.07),M(0x3b2a1a));leg.position.set(s*R*0.6,-y/2,-0.12);g.add(leg)}}
+  if(opt.rope){const rope=new THREE.Mesh(new THREE.BoxGeometry(0.02,8,0.02),M(0x6b5a40));rope.position.y=R+4;g.add(rope)}
+  scene.add(g);const t={g,R,x,y,z,mult:opt.mult||1,vx:opt.vx||0,life:opt.life||0,age:0,hit:false,pop:0,scale:opt.grow?0.01:1,once:!!opt.once,moving:!!opt.vx};
+  if(opt.grow)g.scale.setScalar(0.01);targets.push(t);return t}
+function clearTargets(){for(const t of targets)scene.remove(t.g);targets=[]}
+
+/* ---------- arco, flechas y controles ---------- */
+function makeArrow(){const g=new THREE.Group();
+  const shaft=new THREE.Mesh(new THREE.CylinderGeometry(0.005,0.005,0.72,6),M(0xd9c7a0));shaft.rotation.x=Math.PI/2;shaft.position.z=0.36;g.add(shaft);
+  const tip=new THREE.Mesh(new THREE.ConeGeometry(0.012,0.06,8),M(0x3a3a3a));tip.rotation.x=Math.PI/2;tip.position.z=0.75;g.add(tip);
+  for(let i=0;i<3;i++){const f=new THREE.Mesh(new THREE.BoxGeometry(0.002,0.028,0.08),M(i?0xffffff:0xd2452c));const a=i*2.094;f.position.set(Math.sin(a)*0.014,Math.cos(a)*0.014,0.06);f.rotation.z=-a;g.add(f)}
+  scene.add(g);return g}
+const bow=new THREE.Group();
+const BOWPTS=[[0,0.56,0.03],[0,0.32,-0.05],[0,0.08,-0.08],[0,0,-0.08],[0,-0.08,-0.08],[0,-0.32,-0.05],[0,-0.56,0.03]].map(p=>new THREE.Vector3(...p));
+bow.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(BOWPTS),40,0.012,8),M(0x3b2412)));
+const wrap=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.14,10),M(0xd2452c));wrap.position.set(0,0,-0.08);bow.add(wrap);
+const strGeo=new THREE.BufferGeometry().setFromPoints([BOWPTS[0],new THREE.Vector3(0,0,0.03),BOWPTS[6]]);
+const string=new THREE.Line(strGeo,new THREE.LineBasicMaterial({color:0xf4f1e8}));bow.add(string);
+const REST=new THREE.Vector3(0,0.02,-0.1),NOCK=new THREE.Vector3(0,0,0.03);
+const grips=[0,1].map(i=>{const g=renderer.xr.getControllerGrip(i);g.userData={hand:null,src:null,squeeze:false,trigger:false,lastBuzz:0};
+  g.addEventListener('connected',e=>{g.userData.hand=e.data.handedness;g.userData.src=e.data;setupHands()});
+  g.addEventListener('disconnected',()=>{g.userData.src=null;g.userData.hand=null;setupHands()});
+  g.addEventListener('squeezestart',()=>{g.userData.squeeze=true;press(g)});g.addEventListener('squeezeend',()=>{g.userData.squeeze=false;release(g)});
+  g.addEventListener('selectstart',()=>{g.userData.trigger=true;press(g)});g.addEventListener('selectend',()=>{g.userData.trigger=false;release(g)});
+  const knob=new THREE.Mesh(new THREE.SphereGeometry(0.025,12,8),M(0xf1ece0));g.add(knob);g.userData.knob=knob;
+  scene.add(g);return g});
+let bowG=null,strG=null;
+function setupHands(){bowG=grips.find(g=>g.userData.hand===bowHand)||null;strG=grips.find(g=>g.userData.hand&&g.userData.hand!==bowHand)||null;
+  if(!bow.parent)scene.add(bow);bow.visible=!!bowG;grips.forEach(g=>g.userData.knob.visible=g!==bowG);cancelDraw()}
+const _p=new THREE.Vector3(),_q=new THREE.Quaternion(),_f=new THREE.Vector3(),_u=new THREE.Vector3(),_x=new THREE.Vector3(),_m=new THREE.Matrix4(),UP=new THREE.Vector3(0,1,0);
+function headPos(){const cam=renderer.xr.isPresenting?renderer.xr.getCamera(camera):camera;return new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld)}
+function placeBow(){if(!bowG)return;bowG.getWorldPosition(_p);bowG.getWorldQuaternion(_q);
+  const from=drawing&&strG?strG.getWorldPosition(new THREE.Vector3()):headPos();_f.copy(_p).sub(from);_f.y*=drawing?1:0.3;if(_f.lengthSq()<1e-4)_f.set(0,0,-1);_f.normalize();
+  const fist=new THREE.Vector3(0,0,-1).applyQuaternion(_q);_u.copy(UP).multiplyScalar(0.65).addScaledVector(fist,0.35);_u.addScaledVector(_f,-_u.dot(_f));if(_u.lengthSq()<1e-4)_u.copy(UP);_u.normalize();
+  _x.crossVectors(_u,_f.clone().negate()).normalize();_m.makeBasis(_x,_u,_f.clone().negate());bow.quaternion.setFromRotationMatrix(_m);bow.position.copy(_p);bow.updateMatrixWorld(true)}
+function buzz(g,v,ms){try{const h=g&&g.userData.src&&g.userData.src.gamepad&&g.userData.src.gamepad.hapticActuators;if(h&&h[0])h[0].pulse(v,ms)}catch(e){}}
+
+const V=()=>new THREE.Vector3();
+let nocked=null,drawing=false,power=0;
+const arrows=[];
+function press(g){if(g!==strG||drawing||!bowG)return;if(game.mode&&!game.over&&game.arrowsLeft===0)return;
+  const sp=g.getWorldPosition(V()),np=bow.localToWorld(NOCK.clone());if(sp.distanceTo(np)>0.28)return;
+  drawing=true;nocked=makeArrow();sfx(320,0.04,'triangle',.05)}
+function release(g){if(g!==strG||!drawing)return;if(g.userData.squeeze||g.userData.trigger)return;
+  const sp=g.getWorldPosition(V()),rp=bow.localToWorld(REST.clone()),dir=rp.clone().sub(sp).normalize();
+  drawing=false;resetString();
+  if(power<0.08){scene.remove(nocked);nocked=null;return}
+  const speed=10+power*42;arrows.push({m:nocked,pos:sp.clone(),vel:dir.multiplyScalar(speed),stuck:false,t:0});nocked=null;
+  if(game.mode&&!game.over&&game.arrowsLeft>0){game.arrowsLeft--;updateBoard()}
+  buzz(bowG,0.6,60);buzz(g,0.3,40);sfx(180,0.12,'sawtooth',.05)}
+function cancelDraw(){if(nocked){scene.remove(nocked);nocked=null}drawing=false;resetString()}
+function resetString(){const p=strGeo.attributes.position;p.setXYZ(1,NOCK.x,NOCK.y,NOCK.z);p.needsUpdate=true}
+
+/* ---------- sonido ---------- */
+let ac=null;
+function sfx(f,d,type='square',v=.05){try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator(),gg=ac.createGain();o.type=type;o.frequency.value=f;gg.gain.setValueAtTime(v,ac.currentTime);gg.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);o.connect(gg).connect(ac.destination);o.start();o.stop(ac.currentTime+d)}catch(e){}}
+
+/* ---------- textos flotantes ---------- */
+const pops=[];
+function popText(t,pos,col){const l=label(256,128,(g,w,h)=>textLines(g,w,h,[[t,90,col,64]]));
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.45),new THREE.MeshBasicMaterial({map:l.tex,transparent:true,depthTest:false}));m.position.copy(pos);m.position.z+=0.3;m.renderOrder=5;scene.add(m);pops.push({m,t:0})}
+
+/* ---------- juego ---------- */
+const NAMES={facil:'FÁCIL',medio:'MEDIO',dificil:'DIFÍCIL'};
+const game={mode:null,score:0,arrowsLeft:-1,round:0,time:0,spawn:0,over:false};
+function best(m){return+store.get('dojo:best:'+m)||0}
+function updateBoard(){if(!game.mode){setBoard('DOJO','Tirale a un cartel','Arco en la '+(bowHand==='left'?'izquierda':'derecha'));return}
+  const n=NAMES[game.mode];
+  if(game.over){setBoard(n+' · FIN','Puntaje '+game.score,'Récord '+best(game.mode)+' · tirale a MENÚ');return}
+  const tt='Tiempo '+Math.ceil(Math.max(0,game.time)),info=game.mode==='medio'?'Ronda '+game.round+' · '+tt:tt;
+  setBoard(n,'Puntaje '+game.score,info+' · Récord '+best(game.mode))}
+function clearArrows(){for(const a of arrows)if(a.m.parent)a.m.parent.remove(a.m);arrows.length=0}
+function toMenu(){clearTargets();clearArrows();game.mode=null;game.over=false;showPanels(true);updateBoard()}
+function startMode(m){clearTargets();clearArrows();Object.assign(game,{mode:m,score:0,arrowsLeft:-1,round:0,time:60,spawn:0,over:false});showPanels(false);
+  if(m==='facil'){[[-2.2,1.4,-10],[2.4,1.5,-15],[-3,1.7,-20],[3,1.9,-30],[0,2.1,-40]].forEach(([x,y,z])=>makeTarget(0.45-z*0.012,x,y,z,{stand:true}))}
+  if(m==='medio'){game.round=0;nextRound()}
+  if(m==='dificil'){game.spawn=1;[[-4,2,-28],[0,2.4,-38],[4,2,-33]].forEach(([x,y,z])=>makeTarget(0.6,x,y,z,{stand:true}))}
+  sfx(660,0.15,'triangle',.06);updateBoard()}
+function nextRound(){if(game.over)return;game.round++;
+  targets.filter(t=>t.once).forEach(t=>{t.pop=0.001});
+  for(let i=0;i<2;i++){const z=-(10+Math.random()*(8+game.round*2.5)),x=(Math.random()*2-1)*Math.min(8,3+game.round*0.5),y=1+Math.random()*2;
+    makeTarget(0.55,x,y,z,{once:true,life:5.5-Math.min(2,game.round*0.15),grow:true,rope:true})}
+  updateBoard()}
+function endGame(){game.over=true;if(game.score>best(game.mode))store.set('dojo:best:'+game.mode,game.score);sfx(523,0.2,'triangle',.07);setTimeout(()=>sfx(784,0.3,'triangle',.07),180);updateBoard()}
+function scoreHit(t,r){if(game.over){sfx(300,0.06,'triangle',.04);return}const f=r/t.R;const pts=(f<0.2?10:f<0.4?8:f<0.6?6:f<0.8?4:2)*t.mult;game.score+=pts;
+  popText('+'+pts,t.g.position.clone().add(new THREE.Vector3(0,t.R+0.3,0)),pts>=10?'#f2c230':'#ffffff');
+  sfx(pts>=10?1320:880,0.15,'triangle',.07);buzz(strG,0.8,80);
+  if(t.once){t.hit=true;t.pop=0.001}
+  updateBoard()}
+
+/* ---------- bucle ---------- */
+const clock=new THREE.Clock();let tAll=0;
+renderer.setAnimationLoop(()=>{const dt=Math.min(0.05,clock.getDelta());tAll+=dt;
+  if(!renderer.xr.isPresenting){camera.position.set(Math.sin(tAll*0.2)*0.6,1.6,0.5);camera.lookAt(0,1.9,-12)}
+  placeBow();
+  if(drawing&&strG&&bowG){const sp=strG.getWorldPosition(V()),rp=bow.localToWorld(REST.clone());
+    const d=sp.distanceTo(rp);power=Math.max(0,Math.min(1,(d-0.08)/0.55));
+    nocked.position.copy(sp);nocked.lookAt(rp);
+    const loc=bow.worldToLocal(sp.clone());const p=strGeo.attributes.position;p.setXYZ(1,loc.x,loc.y,loc.z);p.needsUpdate=true;
+    if(tAll-strG.userData.lastBuzz>0.09){strG.userData.lastBuzz=tAll;buzz(strG,0.05+power*0.35,60);if(power>0.95)buzz(bowG,0.15,40)}}
+  for(const a of arrows){if(a.stuck){a.t+=dt;continue}
+    const prev=a.pos.clone();a.vel.y-=4*dt;a.pos.addScaledVector(a.vel,dt);a.m.position.copy(a.pos);a.m.lookAt(a.pos.clone().add(a.vel));
+    let done=false;
+    const cands=[...targets.filter(t=>!t.pop).map(t=>({t,z:t.g.position.z+0.09,cx:t.g.position.x,cy:t.g.position.y,kind:'t'})),
+      ...Object.values(panels).filter(p=>p.g.visible).map(p=>({p,z:p.g.position.z+0.06,cx:p.g.position.x,cy:p.g.position.y,kind:'p'}))];
+    for(const c of cands){if(!(prev.z>c.z&&a.pos.z<=c.z))continue;const k=(prev.z-c.z)/(prev.z-a.pos.z),hp=prev.clone().lerp(a.pos,k);
+      const dx=hp.x-c.cx,dy=hp.y-c.cy;
+      if(c.kind==='t'){const s=c.t.g.scale.x,r=Math.hypot(dx,dy);if(r<=c.t.R*s){const dir=a.vel.clone().normalize();a.m.position.copy(hp).addScaledVector(dir,-0.62);c.t.g.attach(a.m);a.stuck=true;scoreHit(c.t,r/s);done=true;break}}
+      else if(Math.abs(dx)<=c.p.w/2&&Math.abs(dy)<=c.p.h/2){const dir=a.vel.clone().normalize();a.m.position.copy(hp).addScaledVector(dir,-0.62);c.p.g.attach(a.m);a.stuck=true;sfx(500,0.1,'square',.05);buzz(strG,0.6,60);
+        setTimeout(()=>{if(a.m.parent)a.m.parent.remove(a.m);const i=arrows.indexOf(a);if(i>=0)arrows.splice(i,1)},400);c.p.action();done=true;break}}
+    if(done)continue;
+    if(a.pos.y<=0.02){a.pos.y=0.02;a.m.position.copy(a.pos);a.stuck=true;sfx(120,0.08,'triangle',.04)}
+    if(a.pos.z<-62||Math.abs(a.pos.x)>14){a.stuck=true;a.m.visible=false}}
+  for(let i=arrows.length-1;i>=0;i--){const a=arrows[i];if(a.stuck&&a.m.parent===scene&&a.t>10){scene.remove(a.m);arrows.splice(i,1)}}
+  for(const t of targets){t.age+=dt;
+    if(t.scale<1&&!t.pop){t.scale=Math.min(1,t.scale+dt*3);t.g.scale.setScalar(t.scale)}
+    if(t.vx){t.g.position.x+=t.vx*dt;if(Math.abs(t.g.position.x)>12)t.pop=0.001}
+    if(t.life&&!t.pop&&t.age>t.life)t.pop=0.001;
+    if(t.pop){t.pop+=dt;t.g.scale.setScalar(Math.max(0.001,1-t.pop*3));if(t.pop>0.34){scene.remove(t.g);t.dead=true}}}
+  const hadOnce=targets.some(t=>t.once);targets=targets.filter(t=>!t.dead);
+  if(game.mode==='medio'&&!game.over&&hadOnce&&!targets.some(t=>t.once))nextRound();
+  if(game.mode&&!game.over){game.time-=dt;if(Math.floor(game.time+dt)!==Math.floor(game.time))updateBoard();if(game.time<=0)endGame()}
+  if(game.mode==='dificil'&&!game.over){game.spawn-=dt;
+    if(game.spawn<=0){game.spawn=2.2;const dirn=Math.random()<.5?-1:1;makeTarget(0.45,-dirn*12,1.4+Math.random()*2,-(12+Math.random()*16),{vx:dirn*(2+Math.random()*2.5),mult:2,once:true,rope:true})}
+  }
+  for(let i=pops.length-1;i>=0;i--){const p=pops[i];p.t+=dt;p.m.position.y+=dt*0.6;p.m.material.opacity=Math.max(0,1-p.t/1.2);if(p.t>1.2){scene.remove(p.m);pops.splice(i,1)}}
+  renderer.render(scene,camera)});
+
+/* ---------- entrar en VR ---------- */
+toMenu();
+let session=null;
+async function checkXR(){if(!navigator.xr){$('enter').textContent='Este navegador no tiene VR';msg('Abrí esta página desde el navegador del Meta Quest 3.');return}
+  try{const ok=await navigator.xr.isSessionSupported('immersive-vr');if(ok){$('enter').disabled=false;$('enter').textContent='Entrar en VR'}else{$('enter').textContent='VR no disponible acá';msg('Abrí esta página desde el navegador del Meta Quest 3.')}}
+  catch(e){$('enter').textContent='VR no disponible acá';msg('Este marco no deja usar VR. Descargá la página o publicala en tu GitHub y abrila desde ahí.')}}
+checkXR();
+$('enter').addEventListener('click',async()=>{if(session){session.end();return}
+  try{session=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor']});
+    renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session);$('enter').textContent='Salir de VR';msg('');
+    session.addEventListener('end',()=>{session=null;cancelDraw();$('enter').textContent='Entrar en VR';fit()})}
+  catch(e){session=null;msg('No se pudo entrar en VR desde acá. Descargá la página o publicala en tu GitHub y abrila desde ahí.')}});
+}
+}
+</script>
+</body></html>
